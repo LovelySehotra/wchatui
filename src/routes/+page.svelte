@@ -5,7 +5,7 @@
   import { getSocket } from "$lib/socket";
 
   let status = $state("disconnected");
-  let socketId = $state<string | null>(null);
+  let socketId = $state<string | null|undefined>(null);
   let selectedUserId = $state<string | null>(null);
   let messages = $state<any[]>([]);
   let loading = $state(false);
@@ -13,6 +13,8 @@
 
   let messageText = $state("");
   let onlineUsers = $state<Set<string>>(new Set());
+  let typingTimeout: number | null | any= null;
+  let users = $state<any[]>([]);
 
   async function openChat(userId: string) {
     selectedUserId = userId;
@@ -66,8 +68,18 @@
   }
 
   onMount(() => {
-    const token = localStorage.getItem("token")!;
-    console.log("Retrieved token:", token);
+    const token = localStorage.getItem("token");
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+    
+    // Mock users data - replace with actual API call
+    users = [
+      { id: "user1", name: "User One" },
+      { id: "user2", name: "User Two" }
+    ];
+    
     const socket = connectSocket(token);
     console.log("Socket initialized:", socket);
     socket.on("connect", () => {
@@ -109,13 +121,14 @@
   <!-- User List -->
   <div style="width:200px; border-right:1px solid #ccc">
     <h3>Users</h3>
-    <button on:click={() => openChat(user.id)}>
-      {user.name}
-      {#if onlineUsers.has(user.id)}
-        <span style="color:green"> ● online</span>
-      {/if}
-    </button>
-    <button on:click={() => openChat("user2")}>User Two</button>
+    {#each users as user}
+      <button on:click={() => openChat(user.id)}>
+        {user.name}
+        {#if onlineUsers.has(user.id)}
+          <span style="color:green"> ● online</span>
+        {/if}
+      </button>
+    {/each}
   </div>
 
   <!-- Chat Window -->
@@ -135,23 +148,28 @@
           </div>
         {/each}
       </div>
-      {#if typingUsers.has(selectedUserId)}
+      <!-- {#if typingUsers.has(selectedUserId)}
         <p><i>Typing...</i></p>
-      {/if}
+      {/if} -->
       <!-- Input (fixed) -->
       <div style="margin-top:10px; display:flex; gap:5px;">
+        <!-- svelte-ignore event_directive_deprecated -->
         <input
           bind:value={messageText}
           placeholder="Type a message"
           on:input={() => {
+            const socket = getSocket();
+            if (!socket) return;
+            
             socket.emit("typing_start", { receiverId: selectedUserId });
 
-            clearTimeout(typingTimeout);
+            clearTimeout(typingTimeout!);
             typingTimeout = setTimeout(() => {
               socket.emit("typing_stop", { receiverId: selectedUserId });
             }, 1000);
           }}
         />
+        <!-- svelte-ignore event_directive_deprecated -->
         <button on:click={sendMessage}>Send</button>
       </div>
     {/if}
