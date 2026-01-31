@@ -26,6 +26,11 @@
 {#if error}
   <p style="color:red">{error}</p>
 {/if}
+<p>
+  Don’t have an account?
+  <a href="/register">Register</a>
+</p>
+
 <style>
   input {
     display: block;

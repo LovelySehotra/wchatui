@@ -3,17 +3,20 @@
   import { onMount } from "svelte";
   import { fetchChatHistory } from "$lib/api";
   import { getSocket } from "$lib/socket";
+  import { fetchUsers } from "$lib/auth";
 
   let status = $state("disconnected");
-  let socketId = $state<string | null|undefined>(null);
+  let socketId = $state<string | null | undefined>(null);
   let selectedUserId = $state<string | null>(null);
   let messages = $state<any[]>([]);
   let loading = $state(false);
   let cursor = $state<string | null>(null);
+  let myUserId = $state<string>("me");
 
   let messageText = $state("");
   let onlineUsers = $state<Set<string>>(new Set());
-  let typingTimeout: number | null | any= null;
+  let typingTimeout: number | null | any = 300;
+  let typingUsers = $state<Set<string>>(new Set());
   let users = $state<any[]>([]);
 
   async function openChat(userId: string) {
@@ -26,6 +29,20 @@
     cursor = data.length ? data[0]._id : null;
 
     loading = false;
+  }
+  function handleTyping(receiverId: string | null) {
+    if (!receiverId) return;
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    socket.emit("typing_start", { receiverId });
+
+    if (typingTimeout) clearTimeout(typingTimeout);
+
+    typingTimeout = setTimeout(() => {
+      socket.emit("typing_stop", { receiverId });
+    }, 1000);
   }
   function sendMessage() {
     if (!messageText || !selectedUserId) return;
@@ -44,7 +61,7 @@
       status: "sent",
       optimistic: true,
     };
-    console.log("Sending message:", optimisticMessage);
+    // console.log("Sending message:", optimisticMessage);
     messages = [...messages, optimisticMessage];
     messageText = "";
 
@@ -66,20 +83,25 @@
       },
     );
   }
-
-  onMount(() => {
+  const handlerFetchUsers = async () => {
+    // Placeholder function - replace with actual API call
+    try {
+      const data = await fetchUsers();
+      console.log("Fetched users data:", data[0].name);
+      return data;
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      return [];
+    }
+  };
+  onMount(async () => {
     const token = localStorage.getItem("token");
     if (!token) {
       window.location.href = "/login";
       return;
     }
-    
-    // Mock users data - replace with actual API call
-    users = [
-      { id: "user1", name: "User One" },
-      { id: "user2", name: "User Two" }
-    ];
-    
+    users = await handlerFetchUsers();
+
     const socket = connectSocket(token);
     console.log("Socket initialized:", socket);
     socket.on("connect", () => {
@@ -105,73 +127,215 @@
       next.delete(userId);
       onlineUsers = next;
     });
+    socket.on("user_typing", ({ userId }) => {
+      console.log("User typing:", userId);
+      typingUsers = new Set(typingUsers).add(userId);
+    });
+
+    socket.on("user_stop_typing", ({ userId }) => {
+      const next = new Set(typingUsers);
+      next.delete(userId);
+      typingUsers = next;
+    });
   });
+  // svelte-ignore state_referenced_locally
+    console.log("typingUsers list:", typingUsers);
 </script>
 
-<h1>Chat App</h1>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <h3>Chats</h3>
 
-<p>Status: {status}</p>
-{#if socketId}
-  <p>Socket ID: {socketId}</p>
-{/if}
-<hr />
-<hr />
-
-<div style="display:flex; height:70vh">
-  <!-- User List -->
-  <div style="width:200px; border-right:1px solid #ccc">
-    <h3>Users</h3>
     {#each users as user}
-      <button on:click={() => openChat(user.id)}>
-        {user.name}
-        {#if onlineUsers.has(user.id)}
-          <span style="color:green"> ● online</span>
-        {/if}
-      </button>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore event_directive_deprecated -->
+      <div
+        class="chat-item {selectedUserId === user._id ? 'active' : ''}"
+        on:click={() => openChat(user._id)}
+      >
+        <div class="avatar">{user.name[0]}</div>
+
+        <div class="chat-info">
+          <div class="name">{user.name}</div>
+          {#if onlineUsers.has(user._id)}
+            <div class="status online">online</div>
+          {/if}
+        </div>
+      </div>
     {/each}
-  </div>
+  </aside>
 
-  <!-- Chat Window -->
-  <div style="flex:1; padding:10px; display:flex; flex-direction:column;">
+  <!-- Chat Area -->
+  <main class="chat">
     {#if !selectedUserId}
-      <p>Select a user</p>
-
-      <!-- {:else if loading}
-    <p>Loading messages...</p> -->
+      <div class="empty">Select a chat</div>
     {:else}
-      <!-- Messages (scrollable) -->
-      <div style="flex:1; overflow-y:auto; border:1px solid #ddd; padding:5px;">
+      <!-- Header -->
+      <div class="chat-header">
+        <div class="header-name">{selectedUserId}</div>
+        {#if onlineUsers.has(selectedUserId)}
+          <span class="online-dot">● online</span>
+        {/if}
+      </div>
+
+      <!-- Messages -->
+      <div class="messages">
         {#each messages as msg}
-          <div>
-            <b>{msg.senderId}:</b>
-            {msg.text}
+          <div class="message {msg.senderId === 'me' ? 'sent' : 'received'}">
+            <div class="bubble">
+              {msg.text}
+            </div>
           </div>
         {/each}
+
+        {#if typingUsers.has(selectedUserId)}
+          <div class="typing">typing...</div>
+        {/if}
       </div>
-      <!-- {#if typingUsers.has(selectedUserId)}
-        <p><i>Typing...</i></p>
-      {/if} -->
-      <!-- Input (fixed) -->
-      <div style="margin-top:10px; display:flex; gap:5px;">
+
+      <!-- Input -->
+      <div class="input-box">
         <!-- svelte-ignore event_directive_deprecated -->
         <input
-          bind:value={messageText}
           placeholder="Type a message"
-          on:input={() => {
-            const socket = getSocket();
-            if (!socket) return;
-            
-            socket.emit("typing_start", { receiverId: selectedUserId });
-
-            clearTimeout(typingTimeout!);
-            typingTimeout = setTimeout(() => {
-              socket.emit("typing_stop", { receiverId: selectedUserId });
-            }, 1000);
-          }}
+          bind:value={messageText}
+          on:input={() => handleTyping(selectedUserId)}
+          on:keydown={(e) => e.key === "Enter" && sendMessage()}
         />
         <!-- svelte-ignore event_directive_deprecated -->
         <button on:click={sendMessage}>Send</button>
       </div>
     {/if}
-  </div>
+  </main>
 </div>
+
+<style>
+  .app {
+    display: flex;
+    height: 100vh;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 280px;
+    background: #ffffff;
+    border-right: 1px solid #ddd;
+    padding: 10px;
+  }
+
+  .chat-item {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+
+  .chat-item:hover {
+    background: #f5f5f5;
+  }
+
+  .chat-item.active {
+    background: #e9edef;
+  }
+
+  .avatar {
+    width: 40px;
+    height: 40px;
+    background: #25d366;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+  }
+
+  .chat-info .name {
+    font-weight: 600;
+  }
+
+  .status.online {
+    font-size: 12px;
+    color: green;
+  }
+
+  /* Chat area */
+  .chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #efeae2;
+  }
+
+  .chat-header {
+    padding: 12px;
+    background: #f0f2f5;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .online-dot {
+    color: green;
+    font-size: 12px;
+  }
+
+  .messages {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+  }
+
+  .message {
+    display: flex;
+    margin-bottom: 10px;
+  }
+
+  .message.sent {
+    justify-content: flex-end;
+  }
+
+  .bubble {
+    max-width: 60%;
+    padding: 10px;
+    border-radius: 8px;
+    background: white;
+  }
+
+  .message.sent .bubble {
+    background: #d9fdd3;
+  }
+
+  .typing {
+    font-size: 12px;
+    color: gray;
+  }
+
+  /* Input */
+  .input-box {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    background: #f0f2f5;
+  }
+
+  .input-box input {
+    flex: 1;
+    padding: 10px;
+    border-radius: 20px;
+    border: 1px solid #ccc;
+  }
+
+  .input-box button {
+    padding: 10px 16px;
+    border-radius: 20px;
+    border: none;
+    background: #25d366;
+    color: white;
+    cursor: pointer;
+  }
+</style>
